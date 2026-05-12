@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.pth
+*.pt
+data/
+fid_analysis/
+*.egg-info/
+.DS_Store
+*.log

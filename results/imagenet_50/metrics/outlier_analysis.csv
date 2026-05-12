@@ -1,0 +1,5 @@
+Attack,Outlier%,Mean_Dev_sigma,Max_Dev_sigma
+FGSM,0.18,3.41,4.54
+PGD,1.90,3.50,6.95
+PhotoGuard,0.01,1.52,2.95
+C&W,1.36,3.40,5.34

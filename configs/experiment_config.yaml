@@ -1,0 +1,46 @@
+model:
+  name: "runwayml/stable-diffusion-v1-5"
+  strength: 0.6
+  guidance_scale: 7.5
+  num_inference_steps: 25
+  seed: 42
+  resolution: 512
+
+attacks:
+  fgsm:
+    epsilon: 0.0627  # 16/255
+    steps: 1
+  pgd:
+    epsilon: 0.0627
+    alpha: 0.00784   # 2/255
+    steps: 20
+  photoguard:
+    epsilon: 0.1255  # 32/255
+    alpha: 0.00784
+    steps: 100
+  cw:
+    lr: 0.02
+    max_iter: 300
+    max_l2: 25.0
+    binary_search_steps: 5
+
+defenses:
+  diffpure:
+    pre_blur_sigma: 2.0
+    post_blur_sigma: 0.5
+  lssp:
+    k: 3.0
+    bits: 5
+    blur_sigma: 1.0
+
+metrics:
+  asr_threshold: 0.7
+  compute_fid: true
+
+datasets:
+  coco:
+    num_images: 50
+    source: "COCO 2017 validation"
+  imagenet:
+    num_images: 50
+    source: "COCO val2017 (different IDs)"

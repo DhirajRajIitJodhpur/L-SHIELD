@@ -1,0 +1,4 @@
+Comparison,FGSM,PGD,PhotoGuard,C&W,Average
+Clean vs Attack,117.19,248.92,317.05,162.86,211.50
+Clean vs DiffPure,121.52,246.72,285.69,161.52,203.86
+Clean vs LSSP,129.76,193.78,213.04,127.90,166.12

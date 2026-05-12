@@ -1,0 +1,3 @@
+Defense,Avg_SSIM,Avg_ASR%,Avg_Recovery%,Avg_FID
+DiffPure,0.5253,84.0,9.4,221.13
+LSSP,0.5564,82.0,14.4,182.68

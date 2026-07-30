@@ -9,3 +9,17 @@ fid_analysis/
 *.egg-info/
 .DS_Store
 *.log
+*.aux
+*.bbl
+*.blg
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+
+# Exclude compiled paper PDFs to protect manuscript IP
+*.pdf
+!**/figures/*.pdf
+
+# Exclude zip archives
+*.zip

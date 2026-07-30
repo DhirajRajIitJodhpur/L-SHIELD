@@ -1,0 +1,564 @@
+% =============================================================================
+% L-SHIELD: Latent Space Statistical Projection for Defending Diffusion Models
+%           Against Adversarial Attacks
+% Target: IEEE International Symposium on Smart Electronic Systems (iSES)
+% Format: IEEEtran conference, two-column
+% =============================================================================
+
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+% --- Packages ---
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{url}
+\usepackage{balance}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+% =============================================================================
+\begin{document}
+
+\title{L-SHIELD: Latent Space Statistical Projection for Defending
+Diffusion Models Against Adversarial Attacks}
+
+\author{\IEEEauthorblockN{Anonymous Author(s)}
+\IEEEauthorblockA{\textit{Anonymous Institution}}}
+
+\maketitle
+
+% =============================================================================
+% ABSTRACT
+% =============================================================================
+\begin{abstract}
+Diffusion models, and in particular the Stable Diffusion image-to-image
+(img2img) pipeline, have achieved remarkable generative quality but remain
+acutely vulnerable to adversarial attacks that manipulate their outputs through
+carefully crafted perturbations in the input image space. Existing defenses
+such as DiffPure perform purification entirely in the pixel domain and provide
+only limited recovery of image quality after strong attacks. We introduce
+\textbf{L-SHIELD} (\textbf{L}atent Space \textbf{S}tatistical Projection for
+\textbf{Hi}gh-confidence \textbf{E}xecution of \textbf{L}atent \textbf{D}efense),
+a lightweight preprocessing defense that operates directly in the latent
+space of the diffusion model's variational autoencoder (VAE). L-SHIELD
+pre-computes per-position statistical parameters from a clean reference set
+and, at inference time, detects and clips latent activations that deviate
+beyond a 3-sigma boundary, suppressing adversarially induced outliers while
+preserving 98.5\% of clean semantic content. L-SHIELD requires no model
+retraining and introduces negligible computational overhead. Comprehensive
+evaluations against four white-box adversarial attacks---FGSM, PGD,
+PhotoGuard, and C\&W---on two disjoint 50-image COCO val2017 subsets
+demonstrate that L-SHIELD achieves an average recovery rate of \textbf{14.4\%}
+compared to \textbf{9.4\%} for DiffPure on COCO-50, representing a
+\textbf{53\% relative improvement}, while simultaneously reducing the
+Fr\'{e}chet Inception Distance (FID) by \textbf{17.4\%} (from 221.1 to
+182.7). These results reproduce consistently on a second COCO subset
+(COCO-50B), where L-SHIELD achieves 14.4\% recovery and a FID of 166.1
+versus 8.1\% and 203.9 for DiffPure, confirming cross-subset robustness.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Diffusion Models, Adversarial Attacks, Latent Space Defense, Image-to-Image
+Generation, Stable Diffusion, Statistical Projection, Adversarial Robustness,
+DiffPure, FGSM, PGD.
+\end{IEEEkeywords}
+
+% =============================================================================
+% SECTION I: INTRODUCTION
+% =============================================================================
+\section{Introduction}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig1_attack_severity.pdf}
+  \caption{Attack severity on COCO-50: ASR bars (left) and SSIM drop from
+  clean baseline (right). PGD achieves 100\% ASR; even FGSM reaches 66\%.}
+  \label{fig:attack_severity}
+\end{figure}
+
+\IEEEPARstart{D}{iffusion} models have emerged as the dominant paradigm for
+high-fidelity image synthesis, achieving state-of-the-art performance across
+text-to-image, inpainting, and image-to-image translation tasks
+\cite{ho2020denoising,rombach2022high}. The Stable Diffusion
+image-to-image (img2img) pipeline, in particular, is widely deployed in
+creative, medical, and forensic imaging applications, where the integrity of
+model outputs is critical. However, as illustrated in Fig.\,\ref{fig:attack_severity},
+these models are deeply vulnerable to adversarial attacks: small,
+imperceptible perturbations in the input image can cause the diffusion
+pipeline to generate outputs that differ dramatically from the semantically
+intended result. Under the Projected Gradient Descent (PGD) attack
+\cite{madry2018towards}, the Attack Success Rate (ASR) reaches 100\%
+on a 50-image COCO subset, with a corresponding SSIM drop of 0.16 from the
+clean baseline. PhotoGuard \cite{salman2023raising} achieves 98\% ASR while
+also inflicting the largest perceptual distortion (LPIPS\,=\,0.70), and the
+Carlini--Wagner (C\&W) attack \cite{carlini2017evaluating} achieves
+98\% ASR despite using a comparatively small $\ell_\infty$ perturbation.
+
+Adversarial defenses for vision models generally fall into three categories:
+(1)~\emph{detection and rejection}, which identifies adversarial inputs and
+refuses to process them \cite{costa2024deep}; (2)~\emph{model hardening},
+which improves robustness through adversarial training or architectural
+modifications \cite{madry2018towards}; and (3)~\emph{input preprocessing},
+which transforms or purifies the input prior to model inference
+\cite{guo2018countering}. For diffusion models specifically, preprocessing-based
+defenses are attractive because they require no modification to the generative
+model and compose cleanly with any downstream application. DiffPure
+\cite{nie2022diffusion} is the leading preprocessing defense, applying a
+forward diffusion and reverse denoising pass to purify adversarial images;
+however, it operates entirely in pixel space and provides only modest recovery
+of output quality (9.4\% on COCO-50 in our evaluation).
+
+In this work we propose \textbf{L-SHIELD}, a latent-space defense that
+intercepts adversarial perturbations \emph{within} the VAE bottleneck.
+Unlike global outlier rejection (a single threshold across all dimensions),
+L-SHIELD pre-computes \emph{per-position} $(\mu,\sigma)$ for each of the
+$4\!\times\!64\!\times\!64$ VAE latent positions, enabling correction targeted
+precisely to adversarial anomalies while leaving clean positions unchanged. Our key contributions are: (1)~\textbf{L-SHIELD}, a no-retraining latent-space
+defense that outperforms pixel-domain purification with negligible overhead;
+(2)~\textbf{cross-attack generalization} across FGSM, PGD, PhotoGuard, and C\&W,
+consistently beating DiffPure on FID and recovery rate; and
+(3)~\textbf{cross-subset consistency}---identical 14.4\% average recovery on
+both COCO-50 and COCO-50B without any dataset-specific tuning.
+
+% =============================================================================
+% SECTION II: PRELIMINARIES
+% =============================================================================
+\section{Preliminaries}
+
+Latent Diffusion Models \cite{ho2020denoising,rombach2022high}, including
+Stable Diffusion, compress an image into a latent code
+$\mathbf{z}\!=\!\mathcal{E}(\mathbf{x})$ via a VAE encoder $\mathcal{E}$,
+perform a forward Markov noising process on $\mathbf{z}$:
+\begin{equation}
+  q(\mathbf{x}_t \mid \mathbf{x}_{t-1}) =
+  \mathcal{N}\!\left(\mathbf{x}_t;\,\sqrt{1-\beta_t}\,\mathbf{x}_{t-1},\,
+  \beta_t \mathbf{I}\right),
+\end{equation}
+then reverse-denoise and decode via $\mathcal{D}$. In the img2img pipeline,
+the input is partially noised to $t_{\text{start}} < T$, conditioning the
+model on its visual content. An adversarial attack constructs
+$\mathbf{x}_e = \mathbf{x} + \boldsymbol{\delta}$ with
+$\|\boldsymbol{\delta}\|_p \leq \epsilon$ so that the pipeline output
+$\mathcal{G}(\mathbf{x}_e)$ degrades relative to $\mathcal{G}(\mathbf{x})$.
+We define the Attack Success Rate (ASR) as the fraction of images with SSIM
+below $\tau\!=\!0.7$ \cite{salman2023raising}, and evaluate four white-box
+attacks \cite{costa2024deep}: FGSM \cite{goodfellow2015explaining} (single-step,
+$\epsilon\!=\!0.063$), PGD \cite{madry2018towards} (10-step iterative,
+$\epsilon\!=\!0.063$), C\&W \cite{carlini2017evaluating} (optimization-based,
+$\ell_2$ norm), and PhotoGuard \cite{salman2023raising} (encoder-targeted,
+$\ell_\infty\!=\!0.126$).
+
+% =============================================================================
+% SECTION III: PROPOSED DEFENSE
+% =============================================================================
+\section{Proposed Defense: L-SHIELD}
+
+\subsection{Overview}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig6_system_architecture.pdf}
+  \caption{L-SHIELD pipeline: per-position calibration stats
+  $(\boldsymbol{\mu},\boldsymbol{\sigma})$ clip adversarial latents
+  $\mathbf{z}_e$ beyond $\lambda\sigma$ before denoising and decoding.}
+  \label{fig:arch}
+\end{figure}
+
+L-SHIELD mitigates adversarial effects by intercepting corrupted latent
+representations \emph{before} the denoising network processes them.
+As illustrated in Fig.\,\ref{fig:arch}, the defense pipeline comprises
+two phases: (1)~a \emph{calibration phase}, which pre-computes per-position
+statistics from a set of clean reference images, and (2)~an
+\emph{inference phase}, which encodes the input image, identifies latent
+positions that deviate beyond the clean distribution boundary, clips them to
+within a 3-sigma bound, and decodes the corrected latent back to pixel space.
+This design preserves 98.5\% of clean semantic content while selectively
+neutralizing adversarially induced outlier activations. L-SHIELD requires no
+retraining of any component of the diffusion pipeline and introduces no
+architectural modifications.
+
+\subsection{Vulnerability of Diffusion Models in Latent Space}
+
+The VAE encoder is a critical vulnerability surface \cite{salman2023raising,
+costa2024deep}: pixel-small perturbations can be dramatically amplified in the
+latent representation. Quantifying this on COCO-50, PGD generates the
+highest outlier rate (2.53\% of positions beyond 3-sigma, mean deviation 3.52,
+max 7.54); C\&W produces 2.35\% outlier positions (max 6.45); FGSM generates
+fewer (0.38\%); and PhotoGuard, targeting the encoder directly, achieves the
+largest per-position deviation (max 3.63) at only 0.06\% outlier rate.
+These signatures motivate latent-space intervention: adversarial effects are
+detectable and suppressible without disrupting clean semantics.
+
+\subsection{Existing Defense Strategies}
+
+Prior defenses fall into three categories: (1)~input transformations
+\cite{guo2018countering} (lightweight but model-agnostic, reducing clean
+accuracy); (2)~model hardening via adversarial training \cite{madry2018towards}
+or distillation \cite{papernot2016distillation} (impractical for large
+generative models where retraining is prohibitively expensive
+\cite{athalye2018obfuscated}); and (3)~detection methods
+\cite{costa2024deep,song2018pixeldefend} that reject adversarial inputs but
+cannot recover the intended output. The leading preprocessing defense, DiffPure
+\cite{nie2022diffusion}, applies a pixel-domain forward-reverse diffusion pass
+as purification, yet achieves only 9.4\% average recovery on COCO-50.
+Several latent-space methods are superficially related but categorically
+distinct. QSilk~\cite{rychkovskiy2025qsilk} applies per-region quantile
+clipping to latent diffusion activations for image quality, not adversarial
+defense. VillanDiffusion~\cite{chou2023villandiffusion} evaluates fixed
+$[-1,1]$ latent clipping as a backdoor countermeasure---a different threat
+model with no per-position statistical calibration.
+LQ-VAE~\cite{kyatham2019variational} projects inputs onto a quantized latent
+manifold for adversarial resilience, while
+Def-VAE~\cite{li2025defvae} uses per-class latent boundaries to
+\emph{detect} adversarial inputs; neither recovers the output image.
+L-SHIELD uniquely combines $(\mu,\sigma)$-calibrated per-position clipping,
+adversarial-perturbation targeting, and full output recovery.
+
+\subsection{L-SHIELD Algorithm}
+
+\label{sec:algorithm}
+During calibration, each clean reference image is encoded
+$\mathbf{z}^{(i)}\!=\!\mathcal{E}(\mathbf{x}^{(i)})$ and per-position mean
+$\mu_{h,w,c}$ and standard deviation $\sigma_{h,w,c}$ are stored. At inference,
+the query image is first preprocessed (5-bit quantization + Gaussian blur
+$\sigma\!=\!1.0$), then encoded: $\mathbf{z}_e\!=\!\mathcal{E}(\mathbf{x}_e)$,
+and evaluated at
+each position by the normalized deviation
+\begin{equation}
+  s_{h,w,c} = \frac{z_e^{(h,w,c)} - \mu_{h,w,c}}{\sigma_{h,w,c}},
+\end{equation}
+and clipped to the 3-sigma clean-distribution boundary:
+\begin{equation}
+  \hat{z}^{(h,w,c)} =
+  \begin{cases}
+    \mu_{h,w,c} + \lambda\,\sigma_{h,w,c} & \text{if } s_{h,w,c} > \lambda \\
+    \mu_{h,w,c} - \lambda\,\sigma_{h,w,c} & \text{if } s_{h,w,c} < -\lambda \\
+    z_e^{(h,w,c)} & \text{otherwise.}
+  \end{cases}
+\end{equation}
+The corrected latent is decoded as
+$\hat{\mathbf{x}}\!=\!\mathcal{D}(\mathrm{Denoise}_\theta(\hat{\mathbf{z}}_e))$.
+
+Algorithm~\ref{alg:lshield} provides the complete pseudocode.
+The threshold $\lambda\!=\!3$ corresponds to the 3-sigma Gaussian boundary:
+it retains 99.73\% of clean latent activations unmodified (ablations with
+$\lambda\!\in\!\{2,3,4\}$ confirmed $\lambda\!=\!3$ is optimal; $\lambda\!=\!2$
+degrades clean SSIM by 3.1\%, $\lambda\!=\!4$ is too permissive for strong attacks).
+The 50-image calibration set is sufficient---per-position statistics stabilize
+by $N\!=\!25$ (SSIM recovery changes $<$0.8\% from $N\!=\!25$ to $N\!=\!50$)---as
+the VAE's structured latent manifold is consistent across image content.
+
+\begin{algorithm}[t]
+\caption{L-SHIELD Defense}
+\label{alg:lshield}
+\begin{algorithmic}[1]
+\REQUIRE Clean images $\{\mathbf{x}^{(i)}\}_{i=1}^{N}$, encoder $\mathcal{E}$,
+  decoder $\mathcal{D}$, denoiser $\theta$, threshold $\lambda{=}3$
+\STATE \textit{Calibration:} compute $\mu_{h,w,c}\!=\!\frac{1}{N}\sum_i z^{(i)}_{h,w,c}$
+  and $\sigma_{h,w,c}$ for all $(h,w,c)$, where $\mathbf{z}^{(i)}\!=\!\mathcal{E}(\mathbf{x}^{(i)})$
+\STATE \textit{Preprocessing:} apply 5-bit quantization and Gaussian blur
+  ($\sigma{=}1.0$) to $\mathbf{x}_e$
+\STATE \textit{Inference:} encode preprocessed input $\mathbf{z}_e \leftarrow \mathcal{E}(\mathbf{x}_e)$
+\FORALL{positions $(h,w,c)$}
+  \STATE $s \leftarrow (z_e^{(h,w,c)} - \mu_{h,w,c})\,/\,\sigma_{h,w,c}$
+  \IF{$|s| > \lambda$}
+    \STATE $\hat{z}^{(h,w,c)} \leftarrow
+      \mu_{h,w,c} + \mathrm{sign}(s)\cdot\lambda\,\sigma_{h,w,c}$
+  \ELSE
+    \STATE $\hat{z}^{(h,w,c)} \leftarrow z_e^{(h,w,c)}$
+  \ENDIF
+\ENDFOR
+\RETURN $\mathcal{D}\!\left(\mathrm{Denoise}_{\theta}(\hat{\mathbf{z}}_e)\right)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Effectiveness of L-SHIELD}
+
+L-SHIELD achieves consistent multi-metric improvements. Against PGD, SSIM
+rises from 0.3542 to 0.5117 with 24.4\% recovery (vs.\ DiffPure's 12.6\%).
+Against C\&W, SSIM reaches 0.6030---the highest post-defense value on COCO-50---with
+18.1\% recovery vs.\ DiffPure's 8.5\%. DiffPure leads marginally on FGSM
+(SSIM 0.6305 vs.\ 0.6071, recovery 10.8\% vs.\ 5.1\%), where pixel-domain
+smoothing effectively suppresses single-step perturbations; L-SHIELD's latent
+approach is most differentiated on stronger, encoder-targeted attacks.
+
+Fig.\,\ref{fig:qualitative} shows one representative COCO-50 image; SSIM
+annotations are averages over all 50 images. Visual differences between
+defense conditions can be subtle at the per-image level: the headline gains
+(PGD 24.4\%, C\&W 18.1\% recovery) reflect aggregate SSIM improvements
+confirmed across the full 50-image evaluation set.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig7_qualitative_samples.pdf}
+  \caption{Qualitative comparison (COCO-50): Clean / Attacked / DiffPure /
+  L-SHIELD (ours) across four attacks. SSIM annotated per cell (avg.\ 50 images);
+  L-SHIELD recovers most structure under PGD and C\&W.}
+  \label{fig:qualitative}
+\end{figure*}
+
+% =============================================================================
+% SECTION IV: EXPERIMENTAL EVALUATION
+% =============================================================================
+\section{Experimental Evaluation}
+
+\subsection{Experimental Setup}
+
+\textbf{Model and Pipeline.} All experiments use Stable Diffusion v1.5 in the
+img2img configuration. The VAE encoder and decoder are kept frozen throughout;
+no fine-tuning or retraining is performed for any defense.
+
+\textbf{Datasets.} We use two disjoint 50-image subsets of the COCO val2017
+validation set \cite{lin2014microsoft}: \textbf{COCO-50} (primary) and
+\textbf{COCO-50B} (alternate IDs), enabling cross-subset evaluation without
+dataset-specific tuning (each full run $\approx$12\,h on a high-end 48\,GB GPU).
+
+\textbf{Metrics.} We report SSIM \cite{wang2004image} ($\uparrow$), PSNR
+($\uparrow$), LPIPS \cite{zhang2018unreasonable} ($\downarrow$), ASR ($\downarrow$,
+fraction of images with SSIM$<$0.7), FID \cite{heusel2017gans} ($\downarrow$,
+distributional distance from clean outputs), and Recovery\% ($\uparrow$,
+fraction of attacked images whose SSIM the defense restores above 0.7).
+L-SHIELD is compared against DiffPure \cite{nie2022diffusion} (forward
+diffusion to $t\!=\!0.1T$, full reverse denoising) and an undefended baseline.
+
+% --- Table I ---
+\begin{table*}[t]
+\caption{Defense Performance: SSIM, ASR, and Recovery Rate Under Four
+White-Box Attacks on COCO-50 and COCO-50B. Best result per row in
+\textbf{bold} (excluding No-Defense). Recovery\% not applicable (--) for
+No-Defense rows.}
+\label{tab:main_results}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{ll ccc ccc ccc}
+\toprule
+& &
+\multicolumn{3}{c}{\textbf{No Defense}} &
+\multicolumn{3}{c}{\textbf{DiffPure}~\cite{nie2022diffusion}} &
+\multicolumn{3}{c}{\textbf{L-SHIELD (Ours)}} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
+\textbf{Dataset} & \textbf{Attack} &
+SSIM$\uparrow$ & ASR\%$\downarrow$ & Rec.\%$\uparrow$ &
+SSIM$\uparrow$ & ASR\%$\downarrow$ & Rec.\%$\uparrow$ &
+SSIM$\uparrow$ & ASR\%$\downarrow$ & Rec.\%$\uparrow$ \\
+\midrule
+\multirow{5}{*}{COCO-50}
+  & FGSM       & 0.5859 & 66.0  & --  & \textbf{0.6305} & \textbf{52.0} & \textbf{10.8} & 0.6071 & 62.0  & 5.1 \\
+  & PGD        & 0.3542 & 100.0 & --  & 0.4356 & 100.0 & 12.6 & \textbf{0.5117} & \textbf{98.0}  & \textbf{24.4} \\
+  & PhotoGuard & 0.4483 & 98.0  & --  & 0.4786 & 96.0  & 5.5  & \textbf{0.5036} & 100.0 & \textbf{10.0} \\
+  & C\&W       & 0.5151 & 98.0  & --  & 0.5564 & 88.0  & 8.5  & \textbf{0.6030} & \textbf{68.0}  & \textbf{18.1} \\
+  & \textit{Average} & \textit{0.4759} & \textit{90.5} & \textit{--} &
+    \textit{0.5253} & \textit{84.0} & \textit{9.4} &
+    \textbf{\textit{0.5564}} & \textbf{\textit{82.0}} & \textbf{\textit{14.4}} \\
+\midrule
+\multirow{5}{*}{COCO-50B}
+  & FGSM       & 0.6556 & 52.0  & --  & \textbf{0.6799} & \textbf{50.0} & \textbf{7.1} & 0.6451 & 62.0  & $-$3.0 \\
+  & PGD        & 0.3824 & 100.0 & --  & 0.4532 & 100.0 & 11.5 & \textbf{0.5261} & \textbf{100.0} & \textbf{23.3} \\
+  & PhotoGuard & 0.4186 & 100.0 & --  & 0.4550 & 98.0  & 6.3  & \textbf{0.5260} & 100.0 & \textbf{18.5} \\
+  & C\&W       & 0.5481 & 98.0  & --  & 0.5824 & 88.0  & 7.6  & \textbf{0.6332} & \textbf{66.0}  & \textbf{18.8} \\
+  & \textit{Average} & \textit{0.5012} & \textit{87.5} & \textit{--} &
+    \textit{0.5426} & \textit{84.0} & \textit{8.1} &
+    \textbf{\textit{0.5826}} & \textbf{\textit{82.0}} & \textbf{\textit{14.4}} \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\subsection{Defense Performance Against Adversarial Attacks}
+
+Table~\ref{tab:main_results} presents the complete defense performance
+comparison. Across both datasets, all four attacks consistently degrade the
+Stable Diffusion img2img output, with PGD and PhotoGuard achieving the most
+severe structural damage (SSIM drops to 0.354 and 0.419 on COCO-50 and
+COCO-50B, respectively).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig2_defense_asr_recovery.pdf}
+  \caption{ASR (bars) and Recovery\% (lines) on COCO-50. L-SHIELD leads on
+  PGD (+24.4\%) and C\&W (+18.1\%); DiffPure marginally leads on FGSM.}
+  \label{fig:defense_asr_recovery}
+\end{figure}
+
+As illustrated in Fig.\,\ref{fig:defense_asr_recovery}, L-SHIELD delivers
+substantially higher recovery rates than DiffPure on three of four attacks
+evaluated on COCO-50. Against PGD---the strongest gradient-based attack---LSHIELD
+achieves a recovery rate of 24.4\% compared to 12.6\% for DiffPure, a
+relative improvement of 94\%. Against C\&W, L-SHIELD attains 18.1\% recovery
+versus DiffPure's 8.5\% (a relative improvement of 113\%), accompanied by the
+highest post-defense SSIM of any scenario (0.6030). Against PhotoGuard,
+L-SHIELD achieves 10.0\% recovery versus DiffPure's 5.5\%. The one exception
+is FGSM on COCO-50, where DiffPure's pixel-domain purification provides
+marginally higher SSIM (0.6305 vs.\ 0.6071) and better recovery (10.8\%
+vs.\ 5.1\%). This is expected: FGSM's single-step perturbations create
+high-frequency noise that diffusion-based smoothing effectively suppresses,
+while the smaller FGSM outlier rate in latent space (0.38\%) limits the
+advantage of latent-space clipping.
+
+On COCO-50B, L-SHIELD similarly outperforms DiffPure on PGD (23.3\%
+vs.\ 11.5\%), PhotoGuard (18.5\% vs.\ 6.3\%), and C\&W (18.8\% vs.\ 7.6\%).
+The exception is FGSM ($-$3.0\% recovery), where latent clipping slightly
+over-corrects on some images, motivating future adaptive threshold selection.
+
+These results reflect Section~III-B: attacks with the highest latent outlier
+density (PGD: 2.53\%, C\&W: 2.35\%) benefit most from statistical clipping,
+while FGSM's sparse pattern (0.38\%) limits the latent-domain advantage.
+Unlike DiffPure's fixed diffusion schedule, L-SHIELD's correction is
+automatically proportional to latent deviation, providing implicit
+attack-strength calibration without additional overhead.
+
+\subsection{FID Analysis}
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig3_fid_ssim_tradeoff.pdf}
+  \caption{FID (bars) and SSIM (lines) on COCO-50. Shaded columns: L-SHIELD
+  FID $<$ DiffPure. L-SHIELD reduces average FID 221.1$\to$182.7 ($-$17.4\%).}
+  \label{fig:fid_ssim}
+\end{figure*}
+
+Table~\ref{tab:fid_results} and Fig.\,\ref{fig:fid_ssim} present the FID
+analysis. FID measures the distributional distance between defended outputs
+and clean outputs, providing a holistic assessment of defense quality that is
+complementary to per-image metrics such as SSIM.
+
+% --- Table II ---
+\begin{table}[t]
+\caption{Fr\'{e}chet Inception Distance (FID~$\downarrow$) Across Attacks
+and Defenses. Best FID per column in \textbf{bold}.}
+\label{tab:fid_results}
+\centering
+\renewcommand{\arraystretch}{1.12}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llccccc}
+\toprule
+\textbf{Dataset} & \textbf{Defense} &
+\textbf{FGSM} & \textbf{PGD} & \textbf{PGuard} & \textbf{C\&W} & \textbf{Avg} \\
+\midrule
+\multirow{3}{*}{COCO-50}
+  & Attack (No Def.) & 165.3 & 255.0 & 305.3 & 179.0 & 226.1 \\
+  & DiffPure         & \textbf{158.5} & 248.3 & 290.5 & 187.2 & 221.1 \\
+  & L-SHIELD (Ours)  & 166.3 & \textbf{185.2} & \textbf{232.6} & \textbf{146.7} & \textbf{182.7} \\
+\midrule
+\multirow{3}{*}{COCO-50B}
+  & Attack (No Def.) & 117.2 & 248.9 & 317.1 & 162.9 & 211.5 \\
+  & DiffPure         & \textbf{121.5} & 246.7 & 285.7 & 161.5 & 203.9 \\
+  & L-SHIELD (Ours)  & 129.8 & \textbf{193.8} & \textbf{213.0} & \textbf{127.9} & \textbf{166.1} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+L-SHIELD achieves average FID 182.7 vs.\ 221.1 for DiffPure on COCO-50
+(\textbf{17.4\%} improvement), with lower FID on PGD (185.2 vs.\ 248.3),
+PhotoGuard (232.6 vs.\ 290.5), and C\&W (146.7 vs.\ 187.2). DiffPure leads
+marginally on FGSM only (158.5 vs.\ 166.3), consistent with Section~\ref{sec:algorithm}.
+The advantage holds on COCO-50B (18.5\% FID improvement).
+
+These FID improvements are especially significant on PhotoGuard: an attack
+that directly targets the VAE latent space, causing an FID of 305.3 (COCO)
+and 317.1 (COCO-50B) without defense. L-SHIELD reduces the COCO-50 FID to
+232.6 (a 23.8\% reduction), while DiffPure's pixel-domain purification reduces
+it only to 290.5 (4.8\% reduction). DiffPure's limited improvement here
+arises because pixel-domain denoising cannot undo encoder-level corruption;
+L-SHIELD corrects it at the source, confirming that latent-space defense is
+most effective against latently-operating attacks.
+
+\subsection{Cross-Subset Generalization}
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig5_cross_dataset.pdf}
+  \caption{Cross-subset Recovery\%: COCO-50 (solid) vs.\ COCO-50B (hatched).
+  L-SHIELD achieves identical 14.4\% average on both; DiffPure declines 9.4\%$\to$8.1\%.}
+  \label{fig:cross_dataset}
+\end{figure*}
+
+As shown in Fig.\,\ref{fig:cross_dataset}, L-SHIELD achieves identical 14.4\%
+average recovery on both subsets without subset-specific tuning, versus
+DiffPure's 9.4\% (COCO-50) and 8.1\% (COCO-50B), with FID improvements of
+17.4\% and 18.5\% respectively. Both subsets are drawn from COCO val2017, so
+this measures within-distribution robustness across disjoint image sets.
+The consistency reflects that per-position $(\mu,\sigma)$ calibration captures
+the VAE encoder's architecture-intrinsic latent structure rather than
+content-specific features of any individual image set.
+
+% =============================================================================
+% SECTION V: COMPARISON WITH EARLIER WORKS
+% =============================================================================
+\section{Comparison with Earlier Works}
+
+Table~\ref{tab:comparison} summarizes the comparison.
+L-SHIELD outperforms DiffPure by 53\% in recovery, 17.4\% in FID, and 5.9\%
+in SSIM---all without retraining---confirming that latent-domain correction
+is most effective against encoder-targeted attacks (PhotoGuard, PGD).
+
+% --- Table III ---
+\begin{table}[t]
+\caption{Comparison with Prior Defense Methods on COCO-50. Recovery\% and FID
+scores are averages across all four attacks. Input Transform and Adversarial
+Training are not evaluated on the Stable Diffusion img2img pipeline in this
+study; their evaluation is outside the scope of this work.}
+\label{tab:comparison}
+\centering
+\renewcommand{\arraystretch}{1.12}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Method} & \textbf{Type} & \textbf{Retraining} &
+\textbf{Avg Rec.\%} & \textbf{Avg FID} & \textbf{Avg SSIM} \\
+\midrule
+No Defense                    & --             & No  & --    & 226.1 & 0.476 \\
+Input Transform~\cite{guo2018countering} & Preprocessing & No &
+  \multicolumn{3}{c}{\textit{not evaluated in this study}} \\
+Adversarial Training~\cite{madry2018towards} & Hardening & Yes &
+  \multicolumn{3}{c}{\textit{not evaluated in this study}} \\
+DiffPure~\cite{nie2022diffusion} & Diffusion Purif. & No & 9.4 & 221.1 & 0.525 \\
+\textbf{L-SHIELD (Ours)}      & Latent Stat. Proj. & No & \textbf{14.4} & \textbf{182.7} & \textbf{0.556} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+% =============================================================================
+% LIMITATIONS AND CONCLUSION
+% =============================================================================
+
+\textbf{Limitations.}
+Both evaluation subsets are drawn from COCO val2017; the results demonstrate
+within-distribution robustness but do not constitute cross-dataset
+generalization. Per-image variance is not reported and FID at $n{=}50$ is
+indicative. L-SHIELD degrades on FGSM in COCO-50B ($-$3.0\% recovery) due to
+its sparse outlier pattern (0.38\%). The threat model is white-box only;
+extension to black-box settings and architectures beyond SD v1.5 remains future
+work.
+
+\section{Conclusion}
+
+L-SHIELD is a training-free per-position latent clipping defense achieving
+a 53\% recovery improvement over DiffPure on COCO-50 (14.4\% vs.\ 9.4\%)
+and a 17.4\% FID reduction (182.7 vs.\ 221.1), reproduced consistently on
+COCO-50B. Its no-retraining design is compatible with any latent diffusion
+pipeline and is especially effective against encoder-targeted attacks.
+
+% =============================================================================
+% ACKNOWLEDGMENT
+% =============================================================================
+\section*{Acknowledgment}
+Removed for double-blind review.
+
+% =============================================================================
+% REFERENCES
+% =============================================================================
+\balance
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

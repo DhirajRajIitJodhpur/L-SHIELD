@@ -1,6 +1,6 @@
 # Adversarial Attacks and Defenses on Image-to-Image Stable Diffusion Model
 
-**Author:** Dhiraj Raj (M24CSA009) | **Supervisor:** Dr. Palash Das | **IIT Jodhpur**
+**Author:** Dhiraj Raj (M24CSA009) | IIT Jodhpur
 
 ## Overview
 
